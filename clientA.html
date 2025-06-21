@@ -1,167 +1,265 @@
-  <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Client A</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WebRTC Client A</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(to right, #e0eafc, #cfdef3);
+      color: #2c3e50;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 2.2rem;
+      margin-bottom: 20px;
+      color: #34495e;
+    }
+
+    .btn-group {
+      margin: 20px 0;
+    }
+
+    button {
+      padding: 12px 24px;
+      margin: 8px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      background-color: #3498db;
+      color: white;
+      cursor: pointer;
+      transition: background-color 0.2s ease, transform 0.2s ease;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    button:hover:not(:disabled) {
+      background-color: #2980b9;
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      background-color: #95a5a6;
+      cursor: not-allowed;
+    }
+
+    .video-container {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 20px;
+      margin-top: 30px;
+    }
+
+    video {
+      width: 45%;
+      max-width: 480px;
+      border-radius: 12px;
+      border: 3px solid #ecf0f1;
+      box-shadow: 0 0 12px rgba(0, 0, 0, 0.15);
+    }
+
+    #connectionInfo {
+      margin-top: 25px;
+      background-color: #ffffffcc;
+      padding: 12px 20px;
+      border-radius: 8px;
+      display: none;
+      font-size: 18px;
+      font-weight: bold;
+      color: #2c3e50;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      display: inline-block;
+    }
+
+    .label {
+      color: #555;
+    }
+  </style>
 </head>
 <body>
-    <h1>WebRTC Client A</h1>
-    <button id="startCallButton">Start Call</button>
-    <button id="pauseStreamButton">Pause Stream</button>
-    <button id="resumeStreamButton" disabled>Resume Stream</button> 
-    <video id="localVideo" autoplay playsinline muted></video>
-    <video id="remoteVideo" autoplay playsinline></video>
+  <div class="container">
+    <h1>📹 WebRTC Client A</h1>
 
-    <script>
-        const SERVER_URL = "http://192.168.1.13:5221/api/Signal";
-        let localConnection;
-        let connectionId = null;
-        let localStream;
+    <div class="btn-group">
+      <button id="startCallButton">Start Call</button>
+      <button id="pauseStreamButton">Pause Stream</button>
+      <button id="resumeStreamButton" disabled>Resume Stream</button>
+    </div>
 
-        async function getLocalVideoStream() {
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                document.getElementById('localVideo').srcObject = localStream;
-                return localStream;
-            } catch (err) {
-                console.error("❌ Failed to get local stream:", err);
-                throw err;
+    <div class="video-container">
+      <video id="localVideo" autoplay playsinline muted></video>
+      <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+
+    <div id="connectionInfo">
+      🔗 <span class="label">Connection ID:</span>
+      <span id="connectionIdDisplay"></span>
+    </div>
+  </div>
+
+  <script>
+    const SERVER_URL = "http://192.168.1.239:5221/api/Signal";
+    let localConnection;
+    let connectionId = null;
+    let localStream;
+
+    async function getLocalVideoStream() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('localVideo').srcObject = localStream;
+        return localStream;
+      } catch (err) {
+        console.error("❌ Failed to get local stream:", err);
+        throw err;
+      }
+    }
+
+    async function startCall() {
+      try {
+        console.log("📞 Starting call...");
+        localStream = await getLocalVideoStream();
+        if (!localStream) throw new Error("❌ No local stream available!");
+
+        localConnection = new RTCPeerConnection({
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            {
+              urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
+              credential: 'webrtc',
+              username: 'webrtc'
             }
+          ]
+        });
+
+        localStream.getTracks().forEach(track => localConnection.addTrack(track, localStream));
+
+        localConnection.onicecandidate = event => {
+          if (event.candidate) {
+            sendIceCandidate(event.candidate);
+          }
+        };
+
+        localConnection.oniceconnectionstatechange = () => {
+          console.log("ICE Connection State:", localConnection.iceConnectionState);
+        };
+
+        localConnection.ontrack = event => {
+          console.log("📡 Received track from Client B:", event.streams[0]);
+          document.getElementById('remoteVideo').srcObject = event.streams[0];
+        };
+
+        const offer = await localConnection.createOffer();
+        let offerSDP = offer.sdp.replace("127.0.0.1", "192.168.1.239");
+        await localConnection.setLocalDescription(new RTCSessionDescription({ type: 'offer', sdp: offerSDP }));
+
+        console.log("📡 Sending Offer to server...");
+        const response = await fetch(`${SERVER_URL}/offer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sdp: offerSDP, type: 'offer' }),
+        });
+
+        if (!response.ok) throw new Error("❌ Server rejected the offer.");
+
+        const responseData = await response.json();
+        connectionId = responseData.connectionId;
+        console.log("🔗 Connection ID:", connectionId);
+
+        document.getElementById("connectionIdDisplay").textContent = connectionId;
+        document.getElementById("connectionInfo").style.display = "inline-block";
+
+        await fetchAnswer();
+      } catch (error) {
+        console.error("🚨 Error in startCall:", error);
+      }
+    }
+
+    async function sendIceCandidate(candidate) {
+      if (!connectionId) return;
+      try {
+        await fetch(`${SERVER_URL}/candidate/${connectionId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(candidate),
+        });
+      } catch (error) {
+        console.error("🚨 Error sending ICE Candidate:", error);
+      }
+    }
+
+    async function fetchAnswer() {
+      let retries = 20;
+      while (retries-- > 0) {
+        try {
+          const response = await fetch(`${SERVER_URL}/answer/${connectionId}`);
+          if (response.ok) {
+            const answer = await response.json();
+            await localConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            console.log("🎉 Connection established!");
+            fetchIceCandidates();
+            return;
+          }
+        } catch (error) {
+          console.error("🚨 Error fetching Answer:", error);
         }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      console.error("❌ Failed to get Answer after retries. Check if Client B has responded.");
+    }
 
-        async function startCall() {
-            try {
-                console.log("📞 Starting call...");
-                localStream = await getLocalVideoStream();
-                if (!localStream) throw new Error("❌ No local stream available!");
-
-                localConnection = new RTCPeerConnection({
-                    iceServers: [
-                        { urls: "stun:stun.l.google.com:19302" },
-                        {
-                           urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
-                           credential: 'webrtc',
-                            username: 'webrtc'
-                        }
-                    ]
-                });
-
-                localStream.getTracks().forEach(track => localConnection.addTrack(track, localStream));
-
-                localConnection.onicecandidate = event => {
-                    if (event.candidate) {
-                        sendIceCandidate(event.candidate);
-                    }
-                };
-                localConnection.oniceconnectionstatechange = () => {
-                console.log("ICE Connection State:", localConnection.iceConnectionState);
-                                                                 };
-
-                localConnection.ontrack = event => {
-                    console.log("📡 Received track from Client B:", event.streams[0]);
-                    document.getElementById('remoteVideo').srcObject = event.streams[0];
-                };
-
-                // Tạo offer
-                const offer = await localConnection.createOffer();
-
-                // Thay đổi IP trong SDP
-                let offerSDP = offer.sdp.replace("127.0.0.1", "192.168.1.19");  // Thay thế địa chỉ IP loopback với IP LAN
-                await localConnection.setLocalDescription(new RTCSessionDescription({ type: 'offer', sdp: offerSDP }));
-
-                console.log("📡 Sending Offer to server...");
-                const response = await fetch(`${SERVER_URL}/offer`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ sdp: offerSDP, type: 'offer' }),  // Gửi SDP đã thay đổi
-                });
-
-                if (!response.ok) throw new Error("❌ Server rejected the offer.");
-
-                const responseData = await response.json();
-                connectionId = responseData.connectionId;
-                console.log("🔗 Connection ID:", connectionId);
-
-                await fetchAnswer();
-            } catch (error) {
-                console.error("🚨 Error in startCall:", error);
-            }
+    async function fetchIceCandidates() {
+      setInterval(async () => {
+        if (!connectionId || !localConnection.remoteDescription) return;
+        try {
+          const response = await fetch(`${SERVER_URL}/candidate/${connectionId}`);
+          if (response.ok) {
+            const candidates = await response.json();
+            candidates.forEach(candidate => {
+              localConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => {
+                console.error("🚨 Error adding ICE Candidate:", err);
+              });
+            });
+          }
+        } catch (error) {
+          console.error("🚨 Error fetching ICE Candidate:", error);
         }
+      }, 1000);
+    }
 
-        async function sendIceCandidate(candidate) {
-            if (!connectionId) return;
-            try {
-                await fetch(`${SERVER_URL}/candidate/${connectionId}`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(candidate),
-                });
-            } catch (error) {
-                console.error("🚨 Error sending ICE Candidate:", error);
-            }
-        }
+    function pauseStream() {
+      if (!localStream) return;
+      localStream.getTracks().forEach(track => track.enabled = false);
+      console.log("⏸ Stream Paused");
+      document.getElementById('pauseStreamButton').disabled = true;
+      document.getElementById('resumeStreamButton').disabled = false;
+    }
 
-        async function fetchAnswer() {
-            let retries = 20;
-            while (retries-- > 0) {
-                try {
-                    const response = await fetch(`${SERVER_URL}/answer/${connectionId}`);
-                    if (response.ok) {
-                        const answer = await response.json();
-                        await localConnection.setRemoteDescription(new RTCSessionDescription(answer));
-                        console.log("🎉 Connection established!");
-                        fetchIceCandidates();
-                        return;
-                    }
-                } catch (error) {
-                    console.error("🚨 Error fetching Answer:", error);
-                }
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-            console.error("❌ Failed to get Answer after retries. Check if Client B has responded.");
-        }
+    function resumeStream() {
+      if (!localStream) return;
+      localStream.getTracks().forEach(track => track.enabled = true);
+      console.log("▶ Stream Resumed");
+      document.getElementById('pauseStreamButton').disabled = false;
+      document.getElementById('resumeStreamButton').disabled = true;
+    }
 
-        async function fetchIceCandidates() {
-            setInterval(async () => {
-                if (!connectionId || !localConnection.remoteDescription) return;
-                try {
-                    const response = await fetch(`${SERVER_URL}/candidate/${connectionId}`);
-                    if (response.ok) {
-                        const candidates = await response.json();
-                        candidates.forEach(candidate => {
-                            localConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => {
-                                console.error("🚨 Error adding ICE Candidate:", err);
-                            });
-                        });
-                    }
-                } catch (error) {
-                    console.error("🚨 Error fetching ICE Candidate:", error);
-                }
-            }, 1000);
-        }
-
-        // 🎥 Tạm dừng video
-        function pauseStream() {
-            if (!localStream) return;
-            localStream.getTracks().forEach(track => track.enabled = false);
-            console.log("⏸ Stream Paused");
-            document.getElementById('pauseStreamButton').disabled = true;
-            document.getElementById('resumeStreamButton').disabled = false;
-        }
-
-        // 🎥 Tiếp tục video
-        function resumeStream() {
-            if (!localStream) return;
-            localStream.getTracks().forEach(track => track.enabled = true);
-            console.log("▶ Stream Resumed");
-            document.getElementById('pauseStreamButton').disabled = false;
-            document.getElementById('resumeStreamButton').disabled = true;
-        }
-
-        document.getElementById('startCallButton').addEventListener('click', startCall);
-        document.getElementById('pauseStreamButton').addEventListener('click', pauseStream);
-        document.getElementById('resumeStreamButton').addEventListener('click', resumeStream);
-    </script>
+    document.getElementById('startCallButton').addEventListener('click', startCall);
+    document.getElementById('pauseStreamButton').addEventListener('click', pauseStream);
+    document.getElementById('resumeStreamButton').addEventListener('click', resumeStream);
+  </script>
 </body>
 </html>
